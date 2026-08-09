@@ -1,0 +1,198 @@
+name: usage-billing
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: usage_billing
+      POSTGRES_USER: usage_billing
+      POSTGRES_PASSWORD: usage_billing
+    ports: ["5432:5432"]
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U usage_billing -d usage_billing"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    command: [redis-server, --appendonly, "yes"]
+    ports: ["6379:6379"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redpanda:
+    image: redpandadata/redpanda:v24.3.18
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports: ["9092:9092"]
+    healthcheck:
+      test: [CMD-SHELL, "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 8s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: src/UsageBilling.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Storage__Provider: Postgres
+      Storage__ConnectionString: Host=postgres;Port=5432;Database=usage_billing;Username=usage_billing;Password=usage_billing
+      Redis__Enabled: "true"
+      Redis__ConnectionString: redis:6379
+      Messaging__Provider: Kafka
+      Messaging__BootstrapServers: redpanda:9092
+      Messaging__Topic: usage-events
+      Stripe__Mode: ${STRIPE_MODE:-Demo}
+      Stripe__SecretKey: ${STRIPE_SECRET_KEY:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      DAPR_GRPC_PORT: "50002"
+      DAPR_HTTP_PORT: "3500"
+    ports: ["5090:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      redpanda: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, curl, -f, http://localhost:8080/health]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports: ["4200:8080"]
+    depends_on:
+      api: { condition: service_healthy }
+
+  api-dapr:
+    image: daprio/daprd:1.15.11
+    command:
+      - ./daprd
+      - --app-id
+      - usage-billing-api
+      - --app-port
+      - "8080"
+      - --dapr-http-port
+      - "3500"
+      - --dapr-grpc-port
+      - "50002"
+      - --placement-host-address
+      - placement:50005
+      - --scheduler-host-address
+      - scheduler:50006
+      - --resources-path
+      - /components
+    network_mode: service:api
+    volumes:
+      - ./dapr/components:/components:ro
+    depends_on:
+      - api
+      - placement
+      - scheduler
+      - redis
+      - redpanda
+  billing-worker:
+    build:
+      context: .
+      dockerfile: src/UsageBilling.BillingWorker/Dockerfile
+    environment:
+      Storage__Provider: Postgres
+      Storage__ConnectionString: Host=postgres;Port=5432;Database=usage_billing;Username=usage_billing;Password=usage_billing
+      Stripe__Mode: ${STRIPE_MODE:-Demo}
+      Stripe__SecretKey: ${STRIPE_SECRET_KEY:-}
+      DAPR_GRPC_PORT: "50001"
+    depends_on:
+      api: { condition: service_healthy }
+
+  placement:
+    image: daprio/dapr:1.15.11
+    command: ["./placement", "--port", "50005"]
+    ports: ["50005:50005"]
+
+  scheduler:
+    image: daprio/dapr:1.15.11
+    command: ["./scheduler", "--etcd-data-dir", "/data", "--port", "50006"]
+    ports: ["50006:50006"]
+    volumes: [dapr-scheduler:/data]
+
+  billing-worker-dapr:
+    image: daprio/daprd:1.15.11
+    command:
+      - ./daprd
+      - --app-id
+      - billing-worker
+      - --dapr-grpc-port
+      - "50001"
+      - --placement-host-address
+      - placement:50005
+      - --scheduler-host-address
+      - scheduler:50006
+      - --resources-path
+      - /components
+    network_mode: service:billing-worker
+    volumes:
+      - ./dapr/components:/components:ro
+    depends_on:
+      - billing-worker
+      - placement
+      - scheduler
+      - redis
+      - redpanda
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.130.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: ["./observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro"]
+    ports: ["4317:4317", "4318:4318", "9464:9464"]
+    depends_on: [tempo]
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports: ["3200:3200"]
+
+  prometheus:
+    image: prom/prometheus:v3.4.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes: ["./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
+    depends_on: [api, otel-collector]
+
+  grafana:
+    image: grafana/grafana:12.0.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes: ["./observability/grafana/provisioning:/etc/grafana/provisioning:ro"]
+    ports: ["3000:3000"]
+    depends_on: [prometheus, tempo]
+
+volumes:
+  postgres-data:
+  redis-data:
+  dapr-scheduler:
+  tempo-data:
