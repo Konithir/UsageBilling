@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore
+        run: dotnet restore UsageBilling.sln
+      - name: Build
+        run: dotnet build UsageBilling.sln --configuration Release --no-restore --nologo
+      - name: Test
+        run: dotnet test UsageBilling.sln --configuration Release --no-build --nologo --collect:"XPlat Code Coverage"
+      - name: Dependency audit
+        run: dotnet list UsageBilling.sln package --vulnerable --include-transitive
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm exec ng test --watch=false
+
+  infrastructure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.12.2
+      - name: Check formatting
+        run: terraform -chdir=infra/terraform fmt -check
+      - name: Initialize providers
+        run: terraform -chdir=infra/terraform init -backend=false
+      - name: Validate
+        run: terraform -chdir=infra/terraform validate
