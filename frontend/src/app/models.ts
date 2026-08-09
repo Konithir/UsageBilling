@@ -1,0 +1,9 @@
+export interface RevenuePoint { label: string; actual: number; forecast: number; }
+export interface MeterSummary { key: string; name: string; unit: string; quantity: number; charge: number; changePercent: number; color: string; }
+export interface UsageEvent { eventId: string; accountId: string; accountName: string; meter: string; quantity: number; unit: string; status: string; occurredAt: string; receivedAt: string; }
+export interface InvoiceLine { meter: string; description: string; quantity: number; unitPrice: number; amount: number; }
+export interface Invoice { id: string; number: string; accountId: string; accountName: string; periodStart: string; periodEnd: string; currency: string; subtotal: number; tax: number; total: number; status: string; createdAt: string; issuedAt?: string; lines: InvoiceLine[]; }
+export interface Overview { monthToDateRevenue: number; forecastRevenue: number; eventsThisMonth: number; processedVolume: number; activeAccounts: number; draftInvoices: number; pipelineSuccessRate: number; revenue: RevenuePoint[]; meters: MeterSummary[]; recentEvents: UsageEvent[]; recentInvoices: Invoice[]; }
+export interface Account { id: string; externalId: string; name: string; plan: string; status: string; billingEmail: string; currency: string; monthToDate: number; events: number; createdAt: string; }
+export interface Meter { id: string; key: string; name: string; unit: string; aggregation: string; includedQuantity: number; firstTierLimit: number; firstTierPrice: number; overagePrice: number; currency: string; }
+export interface Integration { name: string; mode: string; status: string; endpoint: string; }

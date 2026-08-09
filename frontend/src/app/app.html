@@ -1,0 +1,168 @@
+<div class="app-shell" [class.nav-open]="navOpen()">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">UB</span><span>UsageBilling</span></div>
+    <nav aria-label="Main navigation">
+      <a class="nav-item active" href="#overview"><span class="nav-icon">▦</span>Overview</a>
+      <a class="nav-item" href="#usage"><span class="nav-icon">↗</span>Usage</a>
+      <a class="nav-item" href="#invoices"><span class="nav-icon">▤</span>Invoices</a>
+      <a class="nav-item" href="#accounts"><span class="nav-icon">○</span>Accounts</a>
+      <a class="nav-item" href="#system"><span class="nav-icon">◇</span>System</a>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="environment"><span></span> Local environment</div>
+      <div class="user"><div class="avatar">KD</div><div><strong>Developer</strong><small>admin</small></div></div>
+    </div>
+  </aside>
+
+  <main>
+    <header class="topbar" id="overview">
+      <button class="menu-button" type="button" (click)="toggleNav()" aria-label="Toggle navigation">☰</button>
+      <div>
+        <h1>Billing overview</h1>
+        <p>Current usage period</p>
+      </div>
+      <div class="topbar-actions">
+        <span class="live-status" [class.offline]="!live()"><i></i>{{ live() ? 'Live updates' : 'Polling' }}</span>
+        <button class="button secondary" type="button" (click)="reload()">Refresh</button>
+        <button class="button primary" type="button" (click)="runBilling()" [disabled]="busy()">Run billing</button>
+      </div>
+    </header>
+
+    @if (notice(); as message) {
+      <div class="notice" [class.error]="message.kind === 'error'">
+        <span>{{ message.text }}</span><button type="button" (click)="closeNotice()" aria-label="Close">×</button>
+      </div>
+    }
+
+    @if (loading() && !overview()) {
+      <div class="loading-panel"><span></span><span></span><span></span></div>
+    } @else if (overview(); as data) {
+      <section class="summary-grid" aria-label="Current billing summary">
+        <article class="metric-card">
+          <div class="metric-head"><span>Month to date</span><span class="metric-icon blue">€</span></div>
+          <strong>{{ data.monthToDateRevenue | currency:'EUR':'symbol':'1.0-0' }}</strong>
+          <small>Usage and base fees</small>
+        </article>
+        <article class="metric-card">
+          <div class="metric-head"><span>Forecast</span><span class="metric-icon green">↗</span></div>
+          <strong>{{ data.forecastRevenue | currency:'EUR':'symbol':'1.0-0' }}</strong>
+          <small>End of current period</small>
+        </article>
+        <article class="metric-card">
+          <div class="metric-head"><span>Usage events</span><span class="metric-icon amber">≡</span></div>
+          <strong>{{ data.eventsThisMonth | number }}</strong>
+          <small>{{ shortNumber(data.processedVolume) }} units processed</small>
+        </article>
+        <article class="metric-card">
+          <div class="metric-head"><span>Pipeline</span><span class="metric-icon violet">✓</span></div>
+          <strong>{{ data.pipelineSuccessRate | number:'1.0-1' }}%</strong>
+          <small>{{ data.draftInvoices }} draft invoice{{ data.draftInvoices === 1 ? '' : 's' }}</small>
+        </article>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="panel revenue-panel">
+          <div class="panel-heading">
+            <div><h2>Revenue</h2><p>Last six billing periods</p></div>
+            <div class="legend"><span><i class="actual"></i>Actual</span><span><i class="forecast"></i>Forecast</span></div>
+          </div>
+          <div class="chart">
+            <div class="y-labels"><span>{{ maxRevenue() | currency:'EUR':'symbol':'1.0-0' }}</span><span>{{ maxRevenue() / 2 | currency:'EUR':'symbol':'1.0-0' }}</span><span>€0</span></div>
+            <div class="chart-area">
+              <div class="grid-line top"></div><div class="grid-line middle"></div><div class="grid-line bottom"></div>
+              @for (point of data.revenue; track point.label) {
+                <div class="bar-group">
+                  <div class="bars"><span class="bar actual" [style.height.px]="barHeight(point.actual)"></span><span class="bar forecast" [style.height.px]="barHeight(point.forecast)"></span></div>
+                  <small>{{ point.label }}</small>
+                </div>
+              }
+            </div>
+          </div>
+        </article>
+
+        <article class="panel meters-panel">
+          <div class="panel-heading"><div><h2>Metered usage</h2><p>Current period</p></div><a href="#usage">Details</a></div>
+          <div class="meter-list">
+            @for (meter of data.meters; track meter.key) {
+              <div class="meter-row">
+                <span class="meter-dot" [style.background]="meter.color"></span>
+                <div class="meter-main"><strong>{{ meter.name }}</strong><small>{{ shortNumber(meter.quantity) }} {{ meter.unit }}</small></div>
+                <div class="meter-amount"><strong>{{ meter.charge | currency:'EUR':'symbol':'1.2-2' }}</strong><small [class.negative]="meter.changePercent < 0">{{ meter.changePercent > 0 ? '+' : '' }}{{ meter.changePercent }}%</small></div>
+              </div>
+            }
+          </div>
+        </article>
+      </section>
+
+      <section class="activity-grid" id="usage">
+        <article class="panel events-panel">
+          <div class="panel-heading"><div><h2>Recent usage</h2><p>Latest processed events</p></div><span class="count-badge">{{ data.recentEvents.length }}</span></div>
+          <div class="event-list">
+            @for (event of data.recentEvents; track event.eventId) {
+              <div class="event-row">
+                <span class="event-status"></span>
+                <div class="event-main"><strong>{{ event.accountName }}</strong><small>{{ event.eventId }}</small></div>
+                <div class="event-meter"><strong>{{ meterName(event.meter) }}</strong><small>{{ event.occurredAt | date:'MMM d, HH:mm' }}</small></div>
+                <div class="event-quantity">{{ shortNumber(event.quantity) }} <small>{{ event.unit }}</small></div>
+              </div>
+            }
+          </div>
+        </article>
+
+        <article class="panel ingest-panel">
+          <div class="panel-heading"><div><h2>Record usage</h2><p>Send an event to the metering API</p></div></div>
+          <form (ngSubmit)="recordUsage()">
+            <label>Event ID<input name="eventId" [(ngModel)]="usageForm.eventId" required /></label>
+            <div class="field-row">
+              <label>Account<select name="accountId" [(ngModel)]="usageForm.accountId">@for (account of accounts(); track account.id) { <option [value]="account.externalId">{{ account.name }}</option> }</select></label>
+              <label>Meter<select name="meter" [(ngModel)]="usageForm.meter">@for (meter of meters(); track meter.id) { <option [value]="meter.key">{{ meter.name }}</option> }</select></label>
+            </div>
+            <label>Quantity<input name="quantity" type="number" min="0.0001" step="any" [(ngModel)]="usageForm.quantity" required /></label>
+            <button class="button primary full" type="submit" [disabled]="busy()">{{ busy() ? 'Working…' : 'Record event' }}</button>
+          </form>
+        </article>
+      </section>
+
+      <section class="panel invoices-panel" id="invoices">
+        <div class="panel-heading invoice-heading">
+          <div><h2>Invoices</h2><p>Recent billing periods</p></div>
+          <div class="billing-control"><select [(ngModel)]="billingAccount" aria-label="Billing account">@for (account of accounts(); track account.id) { <option [value]="account.externalId">{{ account.name }}</option> }</select><button class="button secondary" type="button" (click)="runBilling()" [disabled]="busy()">Generate draft</button></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Invoice</th><th>Account</th><th>Period</th><th>Status</th><th class="right">Amount</th><th></th></tr></thead>
+            <tbody>
+              @for (invoice of data.recentInvoices; track invoice.id) {
+                <tr>
+                  <td><strong>{{ invoice.number }}</strong></td><td>{{ invoice.accountName }}</td><td>{{ invoice.periodStart | date:'MMM yyyy' }}</td>
+                  <td><span class="status" [class.draft]="invoice.status === 'Draft'" [class.open]="invoice.status === 'Open'" [class.paid]="invoice.status === 'Paid'">{{ invoice.status }}</span></td>
+                  <td class="right"><strong>{{ invoice.total | currency:invoice.currency:'symbol':'1.2-2' }}</strong></td>
+                  <td class="actions">@if (invoice.status === 'Draft') { <button type="button" (click)="issueInvoice(invoice)" [disabled]="busy()">Issue</button> } @else if (invoice.status === 'Open') { <button type="button" (click)="markPaid(invoice)" [disabled]="busy()">Mark paid</button> }</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="bottom-grid">
+        <article class="panel" id="accounts">
+          <div class="panel-heading"><div><h2>Accounts</h2><p>Current charges</p></div><span class="count-badge">{{ accounts().length }}</span></div>
+          <div class="account-list">
+            @for (account of accounts(); track account.id) {
+              <div class="account-row"><span class="account-initials">{{ account.name.slice(0, 2).toUpperCase() }}</span><div><strong>{{ account.name }}</strong><small>{{ account.plan }} · {{ account.events }} events</small></div><strong>{{ account.monthToDate | currency:account.currency:'symbol':'1.0-0' }}</strong></div>
+            }
+          </div>
+        </article>
+        <article class="panel" id="system">
+          <div class="panel-heading"><div><h2>System</h2><p>Configured services</p></div></div>
+          <div class="integration-list">
+            @for (item of integrations(); track item.name) {
+              <div class="integration-row"><span class="health-dot"></span><div><strong>{{ item.name }}</strong><small>{{ item.mode }} · {{ item.endpoint }}</small></div><span>{{ item.status }}</span></div>
+            }
+          </div>
+        </article>
+      </section>
+    }
+  </main>
+</div>
